@@ -1,0 +1,16 @@
+{
+ "payload": {
+  "product": "the-couch-cut",
+  "version": "0.4.0",
+  "released": "2026-11-08",
+  "zip": "the-couch-cut-update-0.4.0.zip",
+  "sha256": "ff9a7de8b920a8a4980c92208a7eeb39b8cf882f4c6d2e308191a2465afe08ac",
+  "size": 3806415,
+  "notes": [
+   "Type /update any time to get the newest version, free.",
+   "Your own review page: say 'set up my review page' to watch each video, check the script and press Looks good, even from your phone."
+  ],
+  "manifest_url": "https://raw.githubusercontent.com/onascollective-cmyk/couch-cut-updates/main/latest.json"
+ },
+ "signature": "4775ccc42d586f08fcbedae1d07179d59238876c356815df946a65beaec4141a9573446fa012baab4fa48c8da82daf0fff3d69376ed276390b38a819f1adea00"
+}
