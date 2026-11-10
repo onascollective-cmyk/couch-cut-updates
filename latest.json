@@ -1,16 +1,15 @@
 {
  "payload": {
   "product": "the-couch-cut",
-  "version": "0.4.0",
-  "released": "2026-11-08",
-  "zip": "the-couch-cut-update-0.4.0.zip",
-  "sha256": "ff9a7de8b920a8a4980c92208a7eeb39b8cf882f4c6d2e308191a2465afe08ac",
-  "size": 3806415,
+  "version": "0.4.1",
+  "released": "2026-11-09",
+  "zip": "the-couch-cut-update-0.4.1.zip",
+  "sha256": "255128555fa2c61c2dba6fc7cb1f906a88c30bb41eaad8babb4c193f5de0cbdf",
+  "size": 3810207,
   "notes": [
-   "Type /update any time to get the newest version, free.",
-   "Your own review page: say 'set up my review page' to watch each video, check the script and press Looks good, even from your phone."
-  ],
-  "manifest_url": "https://raw.githubusercontent.com/onascollective-cmyk/couch-cut-updates/main/latest.json"
+   "Faster on newer Macs: an Apple chip Mac with 24 GB or more can now edit up to 3 videos at once (2 on 16 GB, 1 on older laptops). Ask Claude \"how many videos can I edit at once\" or run ./reel doctor to see yours.",
+   "New: The Couch Cut Walkthrough, one page that shows everything it can do (with the exact words to say), plus step by step setup for Google Drive and your review page. The link is at the top of START-HERE.html in your folder."
+  ]
  },
- "signature": "4775ccc42d586f08fcbedae1d07179d59238876c356815df946a65beaec4141a9573446fa012baab4fa48c8da82daf0fff3d69376ed276390b38a819f1adea00"
+ "signature": "296fc31daff367c062fa7c8c661ae921f8db0db3feb2f8e13815df470467d900c7519dbce339d05d71f6e19ead6cc9f45816354db7cf64e8a807207d7ea68101"
 }
