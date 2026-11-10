@@ -1,15 +1,14 @@
 {
  "payload": {
   "product": "the-couch-cut",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "released": "2026-11-09",
-  "zip": "the-couch-cut-update-0.4.1.zip",
-  "sha256": "255128555fa2c61c2dba6fc7cb1f906a88c30bb41eaad8babb4c193f5de0cbdf",
-  "size": 3810207,
+  "zip": "the-couch-cut-update-0.5.0.zip",
+  "sha256": "5b1e7e1ac2a88aa7c3bfc6b3c71ab268a7e70958abce46f75d020ba67f8a1e22",
+  "size": 3827309,
   "notes": [
-   "Faster on newer Macs: an Apple chip Mac with 24 GB or more can now edit up to 3 videos at once (2 on 16 GB, 1 on older laptops). Ask Claude \"how many videos can I edit at once\" or run ./reel doctor to see yours.",
-   "New: The Couch Cut Walkthrough, one page that shows everything it can do (with the exact words to say), plus step by step setup for Google Drive and your review page. The link is at the top of START-HERE.html in your folder."
+   "New looks: Fresh, Notebook and Bold, three starter looks with their own colors and fonts. Say \"make me a new look\" and Claude asks a few multiple choice questions (the feel, your colors, your fonts, a name) and makes a look that is all yours. Your current looks stay exactly as they are."
   ]
  },
- "signature": "296fc31daff367c062fa7c8c661ae921f8db0db3feb2f8e13815df470467d900c7519dbce339d05d71f6e19ead6cc9f45816354db7cf64e8a807207d7ea68101"
+ "signature": "a2825cbac079e367c1b1cfbabf6084bf779e698d4c9a0f7edc5d8c479699f7f472fa73807f2bcdf7d3c1338cb28daaf391643635c1dbab6b8adc213e1e8dca0b"
 }
