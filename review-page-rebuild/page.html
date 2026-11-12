@@ -1,0 +1,873 @@
+<title>Couch Cut Review</title>
+<!-- Rebuilt 2026-11-12 for speed. Same database documents, same messages to Claude and same placeholders as before, so it drops into toolbox/review-page/ as is.
+     What changed: a card is built once and then only the piece that changed is touched (a word, a line, a chip, a button), so videos and songs keep playing and a box you are typing in is never redrawn.
+     Look previews only play while they are on screen. A draft is saved only when something really changed, and at once when you leave the page. -->
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Pacifico&family=Playfair+Display:wght@600;700;900&family=Poppins:wght@400;500;600;700&display=swap">
+<style>
+/*COUCH_STYLE*/
+/*REVIEW_STYLE*/
+/*WORDPICKER_CSS*/
+[hidden] { display: none !important; }
+</style>
+
+<main>
+  <header>
+    <svg class="spark s1" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1 C13 8 16 11 23 12 C16 13 13 16 12 23 C11 16 8 13 1 12 C8 11 11 8 12 1Z" fill="#FFEB99" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+    <svg class="spark s2" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1 C13 8 16 11 23 12 C16 13 13 16 12 23 C11 16 8 13 1 12 C8 11 11 8 12 1Z" fill="#B9EBD6" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+    <svg class="spark s3" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1 C13 8 16 11 23 12 C16 13 13 16 12 23 C11 16 8 13 1 12 C8 11 11 8 12 1Z" fill="#BFE4F7" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+    <p class="hand">the couch cut</p>
+    <h1>Videos <span class="hl">waiting</span> on you</h1>
+    <p><span class="tape">one card for each video</span></p>
+  </header>
+  <p class="intro">Every video you ask me to edit lands here. Pick a style, look at the frames, fix the script (tap any word to take it out or give it its own color or font), answer a few questions, then send. I work on them one at a time, in the order you send them (Make priority moves one up), and text you when each next version is ready. Nothing goes to Google Drive until you press Looks good.</p>
+  <div class="links" id="links"><button class="btn" type="button" onclick="location.reload()">Refresh page</button> <a href="https://claude.ai/new" target="_blank" rel="noopener">Start a new chat with Claude</a><!--EXTRA_LINKS--></div>
+  <section class="card order" id="order" hidden aria-labelledby="order-title">
+    <h2 id="order-title">The order I am working in</h2>
+    <p class="sub">Number 1 is what I am doing now. The rest wait their turn. A card that says “your turn” is waiting on you, not on me.</p>
+    <ol class="orderlist" id="orderlist"></ol>
+  </section>
+  <section class="card newvid" aria-labelledby="nv-title">
+    <h2 id="nv-title">Edit a new video</h2>
+    <p class="sub">I check Couch Cut In for new videos and start on them. If you want one in particular, or you have details, write them here. Leave the box empty and I will use my best judgment.</p>
+    <label for="nv-text">Details for this video (optional)</label>
+    <textarea class="note" id="nv-text" maxlength="1000" placeholder="Which video, a hook you want, words to leave out, a look you have in mind, who it is for…"></textarea>
+    <p class="lbl">Assets for this video (optional)</p>
+    <p class="sub">Tap one, both or neither. “I added assets” means pictures, logos or screen recordings are waiting in Couch Cut In, in the Assets folder, and I look there first.</p>
+    <div id="nv-assets"></div>
+    <div class="bar">
+      <button class="btn primary big" id="nv-go" type="button">Edit new video</button>
+      <span class="status" id="nv-status" role="status"></span>
+    </div>
+    <div class="reqs" id="reqs" aria-live="polite"></div>
+  </section>
+  <section id="list" aria-live="polite"></section>
+</main>
+
+<script>
+/*WORDPICKER_JS*/
+(function () {
+  var db = null, comments = null;
+  var videos = {}, answers = {}, local = {}, timers = {}, chain = {}, confirmTimer = {}, lastSaved = {}, answersReady = false;
+  var priorities = {}, requests = {}, refreshes = {}, refreshNote = {}, statusOpen = {};
+  var cards = {};                              // id -> { el, key, build, round, ui }: a card is built once, then only patched
+  var LOOK_NAMES = { "simple": "Simple", "polished": "Polished", "over-the-top": "Over the Top", "scribble": "Scribble", "handmade": "Handmade" };
+
+  function $(id) { return document.getElementById(id); }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+  function look(k) { return LOOK_NAMES[k] || k; }
+  var soon = window.requestAnimationFrame ? function (f) { return window.requestAnimationFrame(f); } : function (f) { return setTimeout(f, 16); };
+  function once(fn) { var waiting = false; return function () { if (waiting) return; waiting = true; soon(function () { waiting = false; fn(); }); }; }
+
+  // ---- what you have chosen on a card (kept apart from the card itself, so a card can be built again without losing it) -------
+  function stateOf(id) {
+    var v = videos[id], a = answers[id];
+    if (!local[id]) {
+      var fresh = a && a.round === v.round;
+      var wp = WP.State();
+      if (fresh && a.words) {
+        (a.words.drop || []).forEach(function (i) { wp.drop[i] = true; });
+        (a.words.back || []).forEach(function (i) { wp.drop[i] = false; });
+        Object.keys(a.words.style || {}).forEach(function (i) { wp.sty[i] = a.words.style[i]; });
+      }
+      local[id] = { style: fresh ? a.style || "" : "", cover: fresh ? a.cover || "" : "", changes: fresh && a.changes ? JSON.parse(JSON.stringify(a.changes)) : {}, extra: fresh ? a.extra || "" : "",
+                    carousel: fresh ? a.carousel || "" : "", story: fresh ? a.story || "" : "", context: fresh ? a.context || "" : "",
+                    music: fresh ? a.music || "" : "", volume: fresh && a.volume !== undefined ? a.volume : (v.review && v.review.music ? v.review.music.volume : 35),
+                    gifs: fresh ? a.gifs || "" : "", wp: wp, board: "", error: "", sendNote: "", confirm: false };
+    }
+    return local[id];
+  }
+  function phase(id) {
+    var v = videos[id], a = answers[id];
+    if (a && a.round === v.round && a.status === "done") return "approved";      // stays until Claude has uploaded it and takes the card off, so an approval nobody heard is never hidden
+    if (a && a.status === "done" && a.round !== v.round) return "gone";
+    if (a && a.round === v.round && a.status === "sent") return v.stage === "building" ? "building" : "sent";
+    if (v.stage === "building") return "building";
+    return v.stage === "review" ? "review" : "pick";
+  }
+  function lineSummary(id) {
+    var v = videos[id], s = local[id], parts = [];
+    (v.rows || []).forEach(function (r) {
+      var c = s.changes[r.n];
+      if (!c) return;
+      if (c.cut === true) parts.push("cut line " + r.n);
+      if (c.cut === false) parts.push("put back line " + r.n);
+      if (c.note && c.note.trim()) parts.push('note on line ' + r.n + ': "' + c.note.trim().replace(/"/g, "'") + '"');
+    });
+    return parts;
+  }
+  function trackName(v, tid) { var t = (v.musicChoices || []).filter(function (x) { return x.id === tid; })[0]; return t ? t.name : tid; }
+  function summary(id) {
+    var v = videos[id], s = local[id], parts = [];
+    if (phase(id) === "pick") {
+      if (s.style) parts.push("style " + look(s.style));
+    }
+    if (v.askCarousel) {
+      var what = [s.carousel === "yes" ? "carousel" : "", s.story === "yes" ? "story" : ""].filter(Boolean);
+      parts.push(what.length ? "make a " + what.join(" and a ") + " from this video" + (s.context.trim() ? ' (context: "' + s.context.trim().replace(/"/g, "'") + '")' : "") : "no carousel or story");
+    }
+    if (v.musicChoices && v.musicChoices.length && s.music) parts.push(s.music === "none" ? "no music" : 'music "' + trackName(v, s.music) + '" at volume ' + s.volume);
+    else if (v.review && v.review.music && s.volume !== v.review.music.volume) parts.push("music volume " + s.volume + " (it was " + v.review.music.volume + ")");
+    if (v.askGifs && s.gifs) parts.push(s.gifs === "yes" ? "add a few GIFs where they fit" : "no GIFs");
+    lineSummary(id).forEach(function (x) { parts.push(x); });
+    WP.parts(s.wp, v.rows || []).forEach(function (x) { parts.push(x); });
+    if (s.extra && s.extra.trim()) parts.push('also: "' + s.extra.trim().replace(/"/g, "'") + '"');
+    var a = WP.args(s.wp, v.rows || []);
+    return parts.join("; ") + (a ? " (for ./reel script: " + a + ")" : "");
+  }
+  function body(id, status) {
+    var v = videos[id], s = local[id], ch = WP.changes(s.wp, v.rows || []);
+    return { name: v.name, round: v.round, status: status, style: s.style || "", cover: s.cover || "", carousel: s.carousel || "", story: s.story || "", context: s.context || "",
+             music: s.music || "", volume: s.volume, gifs: s.gifs || "", changes: s.changes, words: ch, extra: s.extra || "",
+             summary: summary(id), saved: new Date().toISOString() };
+  }
+  function save(id, status) {
+    if (!db) return Promise.resolve();
+    var b = body(id, status);
+    chain[id] = (chain[id] || Promise.resolve()).catch(function () {}).then(function () { return db.doc("answers/" + id).set(b); });
+    return chain[id];
+  }
+  // A draft is written a moment after you stop, only if something changed, and never after you have sent (so a late draft can not undo a Send).
+  function draftKey(id) { var b = body(id, "draft"); delete b.saved; return JSON.stringify(b); }
+  function flush(id) {
+    clearTimeout(timers[id]); timers[id] = 0;
+    if (!db || !videos[id] || !local[id]) return;
+    var ph = phase(id);
+    if (ph !== "pick" && ph !== "review") return;
+    var k = draftKey(id);
+    if (lastSaved[id] === k) return;
+    lastSaved[id] = k;
+    save(id, "draft").catch(function () { lastSaved[id] = ""; });
+  }
+  function draft(id) {
+    if (!db) return;
+    clearTimeout(timers[id]);
+    timers[id] = setTimeout(function () { flush(id); }, 800);
+  }
+  function flushAll() { Object.keys(timers).forEach(function (id) { if (timers[id]) flush(id); }); }
+
+  function alertClaude(anchor, text) {
+    if (!comments || !anchor) return Promise.resolve("later");
+    return comments.canSendToClaude().then(function (can) {
+      if (can !== "available") return "later";
+      return comments.sendToClaude({ anchor: anchor, text: text }).then(function () { return "sent"; });
+    }).catch(function () { return "later"; });
+  }
+  function anchorOf(btn) { return comments ? comments.anchorFor(btn).catch(function () { return null; }) : Promise.resolve(null); }
+  function setError(id, msg) { var s = local[id], c = cards[id]; s.error = msg || ""; if (c && c.ui.err) { c.ui.err.textContent = s.error; c.ui.err.hidden = !s.error; } }
+  function submit(id, btn, status) {
+    var v = videos[id], s = local[id];
+    setError(id, "");
+    if (status === "sent" && phase(id) === "pick" && !s.style) return setError(id, "Pick a style first.");
+    if (!db) return setError(id, "Sign in to claude.ai to send this.");
+    btn.disabled = true;
+    clearTimeout(timers[id]); timers[id] = 0;           // a draft that was about to be saved must not land after this
+    var notes = summary(id);
+    var text = status === "done" ? "Couch Cut review: " + v.name + " (" + id + "): DONE, approved. " +
+               (notes.replace(/\s/g, "") ? "Make these last changes, draw the final and upload it to Drive, no new review: " + notes : "Upload it to Drive.") :
+               "Couch Cut review: " + v.name + " (" + id + "): changes sent for round " + v.round + ". " + notes;
+    anchorOf(btn).then(function (anchor) {
+      return save(id, status).then(function () { return alertClaude(anchor, text); });
+    }).then(function (result) {
+      s.sendNote = result === "sent" ? "Sent to Claude." : "Claude has not seen it yet, it picks it up as soon as it opens this page.";
+      s.confirm = false; clearTimeout(confirmTimer[id]);
+      answers[id] = body(id, status);
+      sync(id);
+      drawOrder();
+    }).catch(function () { btn.disabled = false; setError(id, "Could not send just now. Try again in a moment."); });
+  }
+
+  // ---- Check status: what I last posted about a video I am working on (videos/<id>.build or requests/<id>.build) -------------
+  // build = { stages: [names], step: 1-based, startedAt, etaAt (when I guess it is done), updatedAt, note }.
+  function fmtDur(s) {
+    s = Math.max(0, Math.round(s));
+    var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+    if (h) return h + " h " + m + " min";
+    if (m) return m + " min " + (x < 10 ? "0" : "") + x + " s";
+    return x + " s";
+  }
+  function fmtLeft(ms) {
+    var s = ms / 1000;
+    if (s <= 0) return "A bit longer";
+    if (s < 20) return "Almost done";
+    if (s < 90) return "About 1 min";
+    return "About " + Math.round(s / 60) + " min";
+  }
+  function fmtAgo(ms) { var m = Math.floor(ms / 60000); return m < 1 ? "just now" : m === 1 ? "1 min ago" : m + " min ago"; }
+  function clock(iso) { try { return new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); } catch (e) { return ""; } }
+  function timeText(kind, t) { var now = Date.now(); return kind === "elapsed" ? fmtDur((now - t) / 1000) : kind === "left" ? fmtLeft(t - now) : fmtAgo(now - t); }
+  function tspan(iso, kind) {
+    var t = Date.parse(iso), s = el("span", "");
+    if (isNaN(t)) return s;
+    s.setAttribute("data-t", iso); s.setAttribute("data-k", kind); s.textContent = timeText(kind, t);
+    return s;
+  }
+  function tick() {
+    if (document.hidden) return;
+    var ns = document.querySelectorAll("[data-t]");
+    for (var i = 0; i < ns.length; i++) {
+      var t = Date.parse(ns[i].getAttribute("data-t")); if (isNaN(t)) continue;
+      var x = timeText(ns[i].getAttribute("data-k"), t);
+      if (ns[i].textContent !== x) ns[i].textContent = x;
+    }
+  }
+  function liveDot() { var d = el("span", "live"); d.setAttribute("aria-hidden", "true"); return d; }
+  function stat(label, value, sub) {
+    var d = el("div", ""), dd = el("dd", "");
+    d.appendChild(el("dt", "", label));
+    dd.appendChild(value);
+    if (sub) dd.appendChild(el("small", "", sub));
+    d.appendChild(dd);
+    return d;
+  }
+  // the slip: the step I am on, a bar of the steps, the clock and my guess, the steps down a rail, when I last posted
+  function statusPanel(b) {
+    var p = el("div", "slip"), lab = el("p", "slip-lab");
+    p.setAttribute("aria-live", "off");
+    lab.appendChild(liveDot()); lab.appendChild(document.createTextNode("where I’m at"));
+    p.appendChild(lab);
+    var stages = b && b.stages && b.stages.length ? b.stages : null;
+    if (!stages) {
+      p.appendChild(el("p", "stage", "Getting started"));
+      p.appendChild(el("p", "fine", "I have not posted progress for this one yet. I post an update each time I finish a step."));
+      return p;
+    }
+    var n = stages.length, step = Math.min(Math.max(b.step || 1, 1), n);
+    p.appendChild(el("p", "stage", stages[step - 1]));
+    p.appendChild(el("p", "stepof", "Step " + step + " of " + n));
+    var seg = el("div", "seg");
+    seg.setAttribute("role", "img"); seg.setAttribute("aria-label", "Step " + step + " of " + n);
+    stages.forEach(function (name, i) { seg.appendChild(el("span", i + 1 < step ? "done" : i + 1 === step ? "now" : "")); });
+    p.appendChild(seg);
+    var nums = el("dl", "nums");
+    if (b.startedAt && !isNaN(Date.parse(b.startedAt))) nums.appendChild(stat("Working for", tspan(b.startedAt, "elapsed"), "since " + clock(b.startedAt)));
+    if (b.etaAt && !isNaN(Date.parse(b.etaAt))) {
+      var total = Date.parse(b.etaAt) - Date.parse(b.startedAt);
+      nums.appendChild(stat("Time left", tspan(b.etaAt, "left"), (total > 0 ? "I guessed " + Math.max(1, Math.round(total / 60000)) + " min in all, " : "") + "done around " + clock(b.etaAt)));
+    }
+    if (nums.children.length) p.appendChild(nums);
+    if (b.note) p.appendChild(el("p", "jot", b.note));
+    var ol = el("ol", "rail");
+    stages.forEach(function (name, i) {
+      var li = el("li", i + 1 < step ? "done" : i + 1 === step ? "now" : ""), dot = el("span", "dot", i + 1 < step ? "✓" : "");
+      if (i + 1 === step) li.setAttribute("aria-current", "step");
+      dot.setAttribute("aria-hidden", "true");
+      li.appendChild(dot); li.appendChild(document.createTextNode(name));
+      ol.appendChild(li);
+    });
+    p.appendChild(ol);
+    if (b.updatedAt && !isNaN(Date.parse(b.updatedAt))) {
+      var u = el("p", "fine", "Last update ");
+      u.appendChild(tspan(b.updatedAt, "ago"));
+      u.appendChild(document.createTextNode(". I post an update each time I finish a step."));
+      p.appendChild(u);
+    }
+    return p;
+  }
+  // only for a video I am editing right now. The button opens and closes its own slip, and new progress repaints only the slip.
+  function statusBlock(key, getBuild) {
+    var wrap = el("div", "stwrap"), btn = el("button", "stbtn"), label = document.createTextNode(""), panel = null;
+    btn.type = "button"; btn.id = "stbtn-" + key.replace(/[^A-Za-z0-9_-]/g, "_");
+    btn.appendChild(liveDot()); btn.appendChild(label);
+    wrap.appendChild(btn);
+    function paint() {
+      var open = !!statusOpen[key];
+      btn.setAttribute("aria-expanded", open ? "true" : "false");
+      label.nodeValue = open ? "Hide status" : "Check status";
+      if (panel) { panel.remove(); panel = null; }
+      if (open) { panel = statusPanel(getBuild()); wrap.appendChild(panel); }
+    }
+    btn.addEventListener("click", function () { statusOpen[key] = !statusOpen[key]; paint(); });
+    paint();
+    return { el: wrap, paint: paint };
+  }
+
+  // ---- Refresh: on every video that waits for me or that I am working on. It writes refresh/<id> = { at, name, kind } and tells Claude.
+  // The queue worker reads it: a job that stopped (the app restarted, a chat ended) is started again from where it stopped. It keeps its place in line.
+  function refreshBlock(id, name, kind) {
+    var wrap = el("div", "refresh"), r = refreshes[id], t = r ? Date.parse(r.at) : NaN, recent = !isNaN(t) && Date.now() - t < 2 * 60000;
+    var btn = el("button", "btn small", recent ? "Refresh sent" : "Refresh"); btn.type = "button"; btn.disabled = recent;
+    btn.setAttribute("aria-label", "Refresh: " + name);
+    btn.addEventListener("click", function () {
+      if (!db) return;
+      btn.disabled = true;
+      var at = new Date().toISOString();
+      anchorOf(btn).then(function (anchor) {
+        return db.doc("refresh/" + id).set({ at: at, name: name, kind: kind }).then(function () {
+          refreshes[id] = { at: at, name: name, kind: kind };
+          return alertClaude(anchor, "Couch Cut refresh: " + name + " (" + id + "): it looks stuck, check it and start it again from where it stopped.");
+        });
+      }).then(function (result) {
+        refreshNote[id] = result === "sent" ? "I check it now and start it again if it stopped." : "My safety check picks it up within 30 minutes.";
+        redrawWaiting();
+      }).catch(function () { btn.disabled = false; });
+    });
+    wrap.appendChild(btn);
+    var p = el("p", "fine", "");
+    if (!isNaN(t)) { p.appendChild(document.createTextNode("Refresh sent ")); p.appendChild(tspan(r.at, "ago")); p.appendChild(document.createTextNode(". " + (refreshNote[id] || "It stays in its place in line."))); }
+    else p.textContent = "Looks stuck? Refresh checks on it and starts it again if it stopped. It keeps its place in line.";
+    wrap.appendChild(p);
+    return wrap;
+  }
+  function redrawWaiting() {                 // only the cards that show Refresh (they have nothing you type in and no video)
+    Object.keys(cards).forEach(function (id) { if (!videos[id]) return; var ph = phase(id); if (ph === "sent" || ph === "building" || ph === "approved") sync(id, true); });
+    drawRequests();
+  }
+
+  // ---- Edit new video: one button and a box. The note is saved in requests/<id> and sent to Claude like a review answer -----
+  function rid() { return "r" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5); }
+  function when(iso) { try { return new Date(iso).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }); } catch (e) { return ""; } }
+  function drawRequests() {
+    var box = $("reqs"); if (!box) return;
+    box.textContent = "";
+    Object.keys(requests).filter(function (k) { return requests[k].status !== "done"; })
+      .sort(function (a, b) { return String(requests[a].created).localeCompare(String(requests[b].created)); })
+      .forEach(function (k) {
+        var r = requests[k], d = el("div", "req"), line = el("div", "reqline");
+        line.appendChild(el("span", "when", when(r.created) + "  ·  "));
+        if (r.status === "started") line.appendChild(liveDot());
+        line.appendChild(document.createTextNode(r.status === "started" ? "I am on it. " : "In line. I start it as soon as the videos before it are done. "));
+        if (r.text) line.appendChild(el("span", "sub", "“" + (r.text.length > 140 ? r.text.slice(0, 140) + "…" : r.text) + "”"));
+        var al = assetLine({ added: r.assetsAdded, create: r.assetsCreate });
+        if (al) line.appendChild(el("span", "sub", (r.text ? "  ·  " : "") + al));
+        d.appendChild(line);
+        if (r.status === "started") d.appendChild(statusBlock("r:" + k, function () { return (requests[k] || {}).build; }).el);
+        d.appendChild(refreshBlock(k, r.text ? "New video: " + (r.text.length > 40 ? r.text.slice(0, 40) + "…" : r.text) : "A new video", "request"));
+        box.appendChild(d);
+      });
+    drawOrder();
+  }
+  var assetPick = { added: false, create: false };
+  function assetLine(a) { return a.added && a.create ? "assets: I added some, you create the rest" : a.added ? "assets: I added assets" : a.create ? "assets: you create assets" : ""; }
+  var assetChips = null;
+  function drawAssetChips() {
+    var box = $("nv-assets"); if (!box) return;
+    if (!assetChips) {
+      assetChips = chips([["added", "I added assets"], ["create", "You create assets"]], "Assets for this video", true,
+        function (k) { assetPick[k] = !assetPick[k]; drawAssetChips(); });
+      box.appendChild(assetChips.el);
+    }
+    assetChips.paint(function (k) { return assetPick[k]; });
+  }
+  function sendNew(btn) {
+    var ta = $("nv-text"), st = $("nv-status"), text = ta.value.trim();
+    st.className = "status"; st.textContent = "";
+    if (!db) { st.className = "err"; st.textContent = "Sign in to claude.ai to send this."; return; }
+    btn.disabled = true;
+    var id = rid(), assets = { added: assetPick.added, create: assetPick.create };
+    var doc = { text: text, assetsAdded: assets.added, assetsCreate: assets.create, status: "sent", alerted: false, created: new Date().toISOString() };
+    var msg = "Couch Cut new video (" + id + "): edit the new video waiting in Couch Cut In. " +
+      (text ? 'Details: "' + text.replace(/"/g, "'") + '"' : "No details, use your best judgment.") +
+      (assets.added ? " Assets: I added assets to Couch Cut In, in the Assets folder, look there." : "") +
+      (assets.create ? " Assets: you create assets." : "");
+    anchorOf(btn).then(function (anchor) {
+      return db.doc("requests/" + id).set(doc).then(function () { return alertClaude(anchor, msg); });
+    }).then(function (result) {
+      if (result === "sent") db.doc("requests/" + id).update({ alerted: true }).catch(function () {});
+      ta.value = ""; assetPick.added = false; assetPick.create = false; drawAssetChips(); btn.disabled = false;
+      st.textContent = "Sent. It goes in line after the videos you sent before it, and I text you when its first cut is ready.";
+    }).catch(function () {
+      btn.disabled = false; st.className = "err"; st.textContent = "Could not send just now. Your note is still in the box. Try again in a moment.";
+    });
+  }
+
+  // ---- small pieces -----------------------------------------------------------------------------------------------------------
+  // chips: built once; paint(isOn) only flips which ones are lit
+  function chips(opts, label, multi, onPick) {
+    var box = el("div", "choice"), btns = {};
+    box.setAttribute("role", multi ? "group" : "radiogroup"); box.setAttribute("aria-label", label);
+    opts.forEach(function (o) {
+      var b = el("button", "chip", o[1]); b.type = "button";
+      if (!multi) b.setAttribute("role", "radio");
+      b.addEventListener("click", function () { onPick(o[0]); });
+      btns[o[0]] = b; box.appendChild(b);
+    });
+    function paint(isOn) { Object.keys(btns).forEach(function (k) { btns[k].setAttribute(multi ? "aria-pressed" : "aria-checked", isOn(k) ? "true" : "false"); }); }
+    return { el: box, paint: paint };
+  }
+  function question(title, hint) { var q = el("div", "q"); q.appendChild(el("h3", "", title)); if (hint) q.appendChild(el("p", "sub", hint)); return q; }
+  function onKeyPick(node) { node.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); node.click(); } }); }
+  // look previews play only while they are on screen (a phone should not decode several videos it is not showing)
+  var watcher = "IntersectionObserver" in window ? new IntersectionObserver(function (es) {
+    es.forEach(function (e) {
+      var v = e.target;
+      if (e.isIntersecting) { var p = v.play(); if (p && p.catch) p.catch(function () {}); } else v.pause();
+    });
+  }, { threshold: 0.25 }) : null;
+  // a video you are watching is carried over when its card is built again, so it does not start over
+  function carry(oldCard, cls, src, make) {
+    var o = oldCard ? oldCard.querySelector("video." + cls) : null;
+    if (!o || o.getAttribute("src") !== src) return make();
+    if (!o.paused) setTimeout(function () { var p = o.play(); if (p && p.catch) p.catch(function () {}); }, 0);
+    return o;
+  }
+  function player(cls, src, label) {
+    var v = document.createElement("video");
+    v.className = cls; v.controls = true; v.setAttribute("playsinline", ""); v.preload = "metadata"; v.src = src;
+    v.setAttribute("aria-label", label);
+    return v;
+  }
+
+  // ---- the script: lines you can cut, words you can take out or style, a note under every line -------------------------------
+  // Built once. A tap on a word flips that one word; Cut repaints that one line; the "As it will read" sheet is repainted once per frame.
+  function scriptEl(id, ui) {
+    var v = videos[id], s = local[id], rowsData = v.rows || [];
+    var wrap = el("div", "script"), rows = el("div", "rows"), bar = el("div", "wp-bar");
+    var wordMap = WP.wordsOf(rowsData), rowOf = {}, parts = {}, byN = {};
+    bar.id = "wpbar-" + id; bar.hidden = true;
+    function keptNow(r) { var c = s.changes[r.n] || {}; return c.cut === undefined ? r.kept : !c.cut; }
+    function paintRow(r) {
+      var p = parts[r.n], k = keptNow(r);
+      p.row.className = "row" + (k ? "" : " cut") + (p.broll ? " broll" : "");
+      if (r.words && r.words.length) p.tx.innerHTML = WP.lineHtml(s.wp, r, k);
+      p.flag.className = "flag " + (k ? "keep" : "cut"); p.flag.textContent = k ? "In the video" : "Cut";
+      p.btn.textContent = k ? "Cut" : "Put back";
+      p.btn.setAttribute("aria-label", (k ? "Cut" : "Put back") + " line " + r.n);
+    }
+    function paintBar() { var html = WP.barHtml(s.wp, wordMap); bar.innerHTML = html; bar.hidden = !html; }
+    function rowsOfWords(list) { var seen = {}, out = []; list.forEach(function (i) { var r = rowOf[i]; if (r && !seen[r.n]) { seen[r.n] = 1; out.push(r); } }); return out; }
+    var paintSheet = once(function () {
+      if (ui.sheet) ui.sheet.innerHTML = WP.readHtml(s.wp, rowsData, function (n) { return keptNow(byN[n]); });
+    });
+    rowsData.forEach(function (r) {
+      byN[r.n] = r;
+      (r.words || []).forEach(function (w) { rowOf[w.i] = r; });
+      var c = s.changes[r.n] || {}, row = el("div", "row"), b = el("div", "body"), tx = el("span", "tx"), flag = el("span", "flag"), act = el("div", "act"), btn = el("button", "btn");
+      row.appendChild(el("span", "no", String(r.n)));
+      var meta = [r.t === "cut" ? "" : r.t, r.s ? r.s + " s" : "", r.sec ? "section " + r.sec : ""].filter(Boolean).join("  ·  ");
+      if (meta) b.appendChild(el("span", "meta", meta));
+      if (!(r.words && r.words.length)) tx.textContent = r.text;
+      b.appendChild(tx); b.appendChild(flag);
+      if (!r.kept && r.why) b.appendChild(el("span", "why", "Why: " + r.why));
+      row.appendChild(b);
+      btn.type = "button"; btn.setAttribute("data-line", r.n);
+      act.appendChild(btn); row.appendChild(act);
+      var note = document.createElement("input");
+      note.type = "text"; note.className = "note"; note.id = "note-" + id + "-" + r.n;
+      note.placeholder = "Change anything here: shorter, say it differently, add a sound…";
+      note.value = c.note || "";
+      note.setAttribute("aria-label", "Note for line " + r.n);
+      note.setAttribute("data-note", r.n);
+      row.appendChild(note);
+      parts[r.n] = { row: row, tx: tx, flag: flag, btn: btn, broll: (r.text || "").indexOf("[picture only") === 0 };
+      paintRow(r);
+      rows.appendChild(row);
+    });
+    rows.addEventListener("click", function (e) {
+      var w = e.target.closest("[data-wp-i]");
+      if (w) {                                                    // one word: flip it and repaint the little toolbar, nothing else
+        var i = +w.dataset.wpI; s.wp.sel[i] = !s.wp.sel[i];
+        w.classList.toggle("wp-sel", !!s.wp.sel[i]);
+        paintBar();
+        return;
+      }
+      var btn = e.target.closest("[data-line]");
+      if (!btn) return;
+      var r = byN[+btn.getAttribute("data-line")], cur = s.changes[r.n] || {}, now = cur.cut === undefined ? r.kept : !cur.cut;
+      if (!now === r.kept) delete cur.cut; else cur.cut = now;
+      s.changes[r.n] = cur;
+      var had = rowsOfWords(WP.selected(s.wp)); s.wp.sel = {};
+      had.forEach(paintRow); paintRow(r); paintBar();
+      draft(id); paintSheet();
+    });
+    rows.addEventListener("input", function (e) {
+      var n = e.target.getAttribute && e.target.getAttribute("data-note");
+      if (n === null || n === undefined) return;
+      var cur = s.changes[+n] || {}; cur.note = e.target.value; s.changes[+n] = cur; draft(id);
+    });
+    bar.addEventListener("click", function (e) {
+      var b = e.target.closest("[data-wp]"); if (!b) return;
+      var touched = rowsOfWords(WP.selected(s.wp));
+      if (!WP.apply(s.wp, b.dataset.wp, wordMap)) return;
+      touched.forEach(paintRow); paintBar();
+      draft(id); paintSheet();
+    });
+    wrap.appendChild(rows); wrap.appendChild(bar);
+    paintBar();
+    ui.paintSheet = paintSheet;
+    return wrap;
+  }
+
+  function volumeEl(id) {
+    var s = local[id], box = el("div", "vol");
+    var out = el("p", "sub", "Music volume: " + s.volume + " (35 is a quiet bed under your voice)");
+    var inp = document.createElement("input"); inp.type = "range"; inp.min = 0; inp.max = 100; inp.step = 5; inp.value = s.volume;
+    inp.setAttribute("aria-label", "Music volume");
+    inp.addEventListener("input", function () { s.volume = +inp.value; out.textContent = "Music volume: " + s.volume + " (35 is a quiet bed under your voice)"; draft(id); });
+    var ends = el("div", "ends"); ends.appendChild(el("span", "", "Quieter")); ends.appendChild(el("span", "", "Louder"));
+    box.appendChild(out); box.appendChild(inp); box.appendChild(ends);
+    return box;
+  }
+
+  // the questions under the script. Everything is built once and shown or lit as you choose, so a song you are listening to keeps playing.
+  function extras(id, ph) {
+    var v = videos[id], s = local[id], wrap = el("div", "extras");
+    if (v.askCarousel) {
+      var q = question("Do you want a carousel and a story from this video?", "I write them from what you say in the video, in your Scrapbook look. A story here means 3 to 5 tall frames for Instagram Stories. If you meant something else, write it in the box. If I need more context I will ask you, I never guess.");
+      var ctx = document.createElement("textarea"); ctx.className = "note"; ctx.id = "ctx-" + id;
+      ctx.placeholder = "Anything I should know about this video? Who it is for, what you want them to do, what to leave out. Optional.";
+      ctx.value = s.context; ctx.setAttribute("aria-label", "Context for the carousel and story");
+      ctx.addEventListener("input", function () { s.context = ctx.value; draft(id); });
+      var cs = chips([["carousel", "A carousel"], ["story", "A story"]], "Carousel and story", true, function (k) { s[k] = s[k] === "yes" ? "no" : "yes"; paintCs(); draft(id); });
+      var paintCs = function () { cs.paint(function (k) { return s[k] === "yes"; }); ctx.hidden = !(s.carousel === "yes" || s.story === "yes"); };
+      q.appendChild(cs.el); q.appendChild(ctx); paintCs();
+      wrap.appendChild(q);
+    }
+    if (v.musicChoices && v.musicChoices.length) {
+      var qm = question("Music?", "Pick a song from the ones you said yes to. I check how loud it is next to your voice and set it for you. Move the slider to make it quieter or louder.");
+      var list = el("div", "tracks"), tracks = {}, vol = volumeEl(id);
+      list.setAttribute("role", "radiogroup"); list.setAttribute("aria-label", "Music");
+      var paintMusic = function () {
+        Object.keys(tracks).forEach(function (k) { tracks[k].setAttribute("aria-checked", s.music === k ? "true" : "false"); });
+        vol.hidden = !(s.music && s.music !== "none");
+      };
+      [{ id: "none", name: "No music" }].concat(v.musicChoices).forEach(function (t) {
+        var r = el("div", "track"); r.tabIndex = 0; r.setAttribute("role", "radio");
+        r.appendChild(el("div", "tn", t.name + (t.mood ? "  ·  " + t.mood : "")));
+        if (t.url) { var au = document.createElement("audio"); au.controls = true; au.preload = "none"; au.src = t.url; au.addEventListener("click", function (e) { e.stopPropagation(); }); r.appendChild(au); }
+        r.addEventListener("click", function () { s.music = t.id; paintMusic(); draft(id); });
+        onKeyPick(r);
+        tracks[t.id] = r; list.appendChild(r);
+      });
+      qm.appendChild(list); qm.appendChild(vol); paintMusic();
+      wrap.appendChild(qm);
+    } else if (ph === "review" && v.review && v.review.music) {
+      var qv = question("Music volume", "This video has " + v.review.music.name + " under it. Change the slider and send: I swap the sound in a few seconds, no need to draw the video again.");
+      qv.appendChild(volumeEl(id));
+      wrap.appendChild(qv);
+    }
+    if (v.askGifs) {
+      var qg = question("GIFs?", "I place a few from the GIFs you said yes to, where they fit what you say.");
+      var gs = chips([["yes", "A few GIFs where they fit"], ["no", "No GIFs"]], "GIFs", false, function (k) { s.gifs = k; paintGs(); draft(id); });
+      var paintGs = function () { gs.paint(function (k) { return s.gifs === k; }); };
+      qg.appendChild(gs.el); paintGs();
+      wrap.appendChild(qg);
+    }
+    return wrap;
+  }
+
+  // ---- one card. Returns { el, ui }: ui holds the few pieces that are patched later ------------------------------------------
+  function card(id, oldCard) {
+    var v = videos[id], s = stateOf(id), ph = phase(id), ui = { previews: [] };
+    var c = el("article", "card");
+    c.id = "card-" + id;
+    var top = el("div", "top");
+    top.appendChild(el("h2", "", v.name));
+    var noPrev = v.defaultStyle && !(v.styles || []).some(function (st) { return st.url; });        // their default look, no style previews: nothing to pick
+    var tag = ph === "pick" ? (noPrev ? "Check the cuts" : "Pick a style") : ph === "review" ? "Ready for your review" : ph === "sent" ? "Waiting for Claude" : ph === "approved" ? "Approved, waiting for the upload" : "I am editing it";
+    top.appendChild(el("span", "pill", tag + (v.round > 1 ? " · version " + v.round : "")));
+    c.appendChild(top);
+    if (ph === "approved") {
+      c.appendChild(el("p", "wait", "You approved this one. Claude uploads it to Google Drive, texts you, and then this card goes away."));
+      var ap = el("p", "fine", "");
+      var asv = answers[id] && answers[id].saved;
+      if (asv) { ap.appendChild(document.createTextNode("Approved ")); ap.appendChild(tspan(asv, "ago")); ap.appendChild(document.createTextNode(". ")); }
+      ap.appendChild(document.createTextNode("I do it when it is its turn in the line. If it looks stuck, press Refresh."));
+      c.appendChild(ap);
+      c.appendChild(refreshBlock(id, v.name, "video"));
+      return { el: c, ui: ui };
+    }
+    (v.did || []).forEach(function (t) { c.appendChild(el("p", "sub", t)); });
+
+    if (ph === "building" || ph === "sent") {
+      c.appendChild(el("p", "wait", ph === "sent" ? "Saved, waiting for Claude." : "I am working on this one. I will text you when it is ready to review."));
+      if (ph === "sent") {
+        var sv = answers[id] && answers[id].saved, fn = el("p", "fine", (s.sendNote || "Your answers are saved on this page.") + " ");
+        if (sv) { fn.appendChild(document.createTextNode("Saved ")); fn.appendChild(tspan(sv, "ago")); fn.appendChild(document.createTextNode(". ")); }
+        fn.appendChild(document.createTextNode("This card changes to “I am editing it” when Claude starts. Nothing goes to Drive until you approve the finished video."));
+        c.appendChild(fn);
+      }
+      if (ph === "building") { var sb = statusBlock("v:" + id, function () { return (videos[id] || {}).build; }); ui.paintStatus = sb.paint; c.appendChild(sb.el); }
+      c.appendChild(refreshBlock(id, v.name, "video"));
+      return { el: c, ui: ui };
+    }
+
+    if (ph === "pick") {
+      if (noPrev) {
+        if (!s.style) s.style = v.defaultStyle;
+        c.appendChild(el("p", "sub", "Style: " + look(v.defaultStyle) + ", your default. There are no style previews this time. Check the cuts and the script below, then press Looks good, render. If you want a different look, say so in the box at the bottom."));
+      } else {
+        c.appendChild(el("h3", "", "Which style?"));
+        c.appendChild(el("p", "sub", "Each clip is the first seconds of your video in that look. I marked the one I would pick. Tap Whole video in frames to see a few frames from across the video before anything is drawn."));
+        var grid = el("div", "styles"), tiles = {}, frameBtns = {}, board = el("div", "board");
+        grid.setAttribute("role", "radiogroup"); grid.setAttribute("aria-label", "Style");
+        var paintStyles = function () { Object.keys(tiles).forEach(function (k) { tiles[k].setAttribute("aria-checked", s.style === k ? "true" : "false"); }); };
+        var paintBoard = function () {
+          Object.keys(frameBtns).forEach(function (k) { frameBtns[k].textContent = s.board === k ? "Hide the frames" : "Whole video in frames"; });
+          var open = (v.styles || []).filter(function (st) { return st.id === s.board && st.board && st.board.url; })[0];
+          board.textContent = ""; board.hidden = !open;
+          if (!open) return;
+          board.appendChild(el("h3", "", look(open.id) + ": frames across the whole video"));
+          var img = document.createElement("img"); img.decoding = "async"; img.src = open.board.url; img.alt = "Frames from the " + look(open.id) + " look across the whole video";
+          board.appendChild(img);
+          if ((open.board.frames || []).length) board.appendChild(el("p", "sub", open.board.frames.map(function (f) { return f.n + " " + f.what; }).join("  ·  ")));
+        };
+        (v.styles || []).forEach(function (st) {
+          if (st.problem) { var n = el("div", "style"); n.appendChild(el("div", "nm", look(st.id))); n.appendChild(el("p", "nope", "This look cannot be drawn on this footage: " + st.problem)); grid.appendChild(n); return; }
+          var b = el("div", "style");
+          b.tabIndex = 0; b.setAttribute("role", "radio");
+          onKeyPick(b);
+          var vid = document.createElement("video");
+          vid.muted = true; vid.loop = true; vid.setAttribute("playsinline", ""); vid.preload = "metadata"; vid.src = st.url;
+          vid.setAttribute("aria-label", look(st.id) + " preview");
+          if (watcher) { watcher.observe(vid); ui.previews.push(vid); } else vid.autoplay = true;
+          b.appendChild(vid);
+          var nm = el("div", "nm", look(st.id));
+          if (v.recommended === st.id) nm.appendChild(el("span", "rec", "my pick"));
+          b.appendChild(nm);
+          b.appendChild(el("div", "bl", st.blurb || ""));
+          if (st.board && st.board.url) {
+            var fr = el("button", "frames", ""); fr.type = "button";
+            fr.addEventListener("click", function (e) { e.stopPropagation(); s.board = s.board === st.id ? "" : st.id; paintBoard(); });
+            frameBtns[st.id] = fr; b.appendChild(fr);
+          }
+          b.addEventListener("click", function () { s.style = st.id; setError(id, ""); paintStyles(); draft(id); });
+          tiles[st.id] = b; grid.appendChild(b);
+        });
+        c.appendChild(grid); c.appendChild(board);
+        paintStyles(); paintBoard();
+        if (v.recommendedWhy) c.appendChild(el("p", "sub", "Why my pick: " + v.recommendedWhy));
+      }
+      if (v.cuts && v.cuts.url) {
+        c.appendChild(el("h3", "", "The cuts"));
+        c.appendChild(carry(oldCard, "cuts", v.cuts.url, function () { return player("cuts", v.cuts.url, "Quick video of the cuts, with the line numbers"); }));
+        c.appendChild(el("p", "sub", "A small, quick video of the first cut. The number in the corner is the line you hear."));
+      }
+    } else {
+      c.appendChild(carry(oldCard, "main", v.review.url, function () { return player("main", v.review.url, "Review copy of " + v.name); }));
+      c.appendChild(el("p", "sub", look(v.review.look) + ", about " + Math.round(v.review.length) + " seconds. This is a small review copy. The full quality file goes to Drive when you press Looks good."));
+    }
+
+    (v.extras || []).forEach(function (x) {
+      if (!x.url) return;
+      c.appendChild(el("h3", "", x.label));
+      var im = document.createElement("img"); im.loading = "lazy"; im.decoding = "async"; im.src = x.url; im.alt = x.label + " made from this video"; im.style.cssText = "width:100%;border-radius:10px;display:block";
+      c.appendChild(im);
+    });
+    var scriptBox = c;
+    if (ph === "review") {                       // after the first round the script folds away: open it when you need more changes
+      scriptBox = document.createElement("details");
+      scriptBox.className = "scriptbox";
+      scriptBox.open = !!s.scriptOpen;
+      scriptBox.addEventListener("toggle", function () { s.scriptOpen = scriptBox.open; });
+      scriptBox.appendChild(el("summary", "", "Edit the script (open this if you need more changes)"));
+    }
+    scriptBox.appendChild(el("h3", "", "Your script"));
+    scriptBox.appendChild(el("p", "sub", "Tap a word to select it. Then take just that word out, or show it in another color or font (not a highlight: the word itself changes). Cut takes a whole line out. Write under any line what you want changed."));
+    scriptBox.appendChild(scriptEl(id, ui));
+    scriptBox.appendChild(el("h3", "", "As it will read"));
+    ui.sheet = el("div", "sheet"); ui.sheet.id = "sheet-" + id; scriptBox.appendChild(ui.sheet);
+    if (scriptBox !== c) c.appendChild(scriptBox);
+    ui.paintSheet();
+
+    c.appendChild(extras(id, ph));
+
+    var extra = document.createElement("textarea");
+    extra.className = "note"; extra.id = "extra-" + id;
+    extra.placeholder = "Anything else: a hook, on screen text, the order of the lines. You can name an item from the Edit Style Book, like CAP-06.";
+    extra.value = s.extra || "";
+    extra.setAttribute("aria-label", "Anything else for " + v.name);
+    extra.addEventListener("input", function () { s.extra = extra.value; draft(id); });
+    c.appendChild(extra);
+
+    ui.err = el("p", "err", s.error || ""); ui.err.hidden = !s.error;
+    c.appendChild(ui.err);
+    var bar = el("div", "bar");
+    var send = el("button", "btn primary", ph === "pick" ? "Looks good, render" : "Send edits");
+    send.type = "button";
+    send.addEventListener("click", function () { submit(id, send, "sent"); });
+    bar.appendChild(send);
+    c.appendChild(bar);
+    if (ph === "pick") c.appendChild(el("p", "sub", "Looks good, render sends your style, script and answers. I draw it and text you when it is ready to review."));
+    if (ph === "review") {
+      var done = el("button", "btn done", ""), hint = el("p", "sub", "Your notes go with it: I make those last changes, draw the final and upload it, with no new review. Tap Send edits instead if you want to see one more version first.");
+      done.type = "button";
+      ui.paintConfirm = function () {                 // only the button's words and the hint change: the video keeps playing and your typing is left alone
+        done.textContent = s.confirm ? "Tap again to approve" : "Looks good";
+        hint.hidden = !(s.confirm && summary(id).replace(/\s/g, ""));
+      };
+      done.addEventListener("click", function () {
+        clearTimeout(confirmTimer[id]);
+        if (s.confirm) return submit(id, done, "done");
+        s.confirm = true; ui.paintConfirm();
+        confirmTimer[id] = setTimeout(function () { s.confirm = false; var cc = cards[id]; if (cc && cc.ui.paintConfirm) cc.ui.paintConfirm(); }, 5000);
+      });
+      bar.appendChild(done);
+      c.appendChild(el("p", "sub", "Send edits: I make your changes and draw one more version for you to review. Looks good: it is done, I upload it to Google Drive and text you. Looks good with a note: I make that last small change first, then draw the final and upload it, no new review."));
+      c.appendChild(hint);
+      ui.paintConfirm();
+    }
+
+    if (v.caption) {
+      var d = document.createElement("details");
+      d.appendChild(el("summary", "", "Instagram caption and hashtags"));
+      d.appendChild(el("div", "caption", v.caption));
+      c.appendChild(d);
+    }
+    return { el: c, ui: ui };
+  }
+
+  // ---- keeping the page in step with the database ----------------------------------------------------------------------------
+  // structKey: everything that changes what a card shows, except my progress notes (those repaint only the status slip)
+  function structKey(id) {
+    var v = videos[id], a = answers[id] || {}, st = a.status === "draft" ? "" : (a.status || ""), rest = {};          // a draft being typed never rebuilds the card under your fingers
+    Object.keys(v).forEach(function (k) { if (k !== "build") rest[k] = v[k]; });
+    return JSON.stringify([rest, st, st ? a.round : 0]);
+  }
+  function drop(id) {
+    var c = cards[id]; if (!c) return;
+    if (watcher) c.ui.previews.forEach(function (p) { watcher.unobserve(p); });
+    c.el.remove(); delete cards[id];
+  }
+  function sync(id, force) {
+    var v = videos[id], c = cards[id];
+    if (!v) { drop(id); delete local[id]; return; }
+    if (phase(id) === "gone") { drop(id); return; }
+    if (v.lookNames) Object.keys(v.lookNames).forEach(function (k) { LOOK_NAMES[k] = v.lookNames[k]; });   // the owner's own looks
+    var k = structKey(id), bk = JSON.stringify(v.build || null);
+    if (c && !force && c.key === k) {
+      if (c.build !== bk) { c.build = bk; if (c.ui.paintStatus) c.ui.paintStatus(); }
+      return;
+    }
+    if (c && c.round !== v.round) { delete local[id]; delete lastSaved[id]; }
+    // build it again, and put the cursor back where it was if you were typing in it
+    var act = document.activeElement, fid = c && act && act.id && c.el.contains(act) ? act.id : "", a0, a1;
+    if (fid) { try { a0 = act.selectionStart; a1 = act.selectionEnd; } catch (e) {} }
+    var built = card(id, c ? c.el : null);
+    if (c) { if (watcher) c.ui.previews.forEach(function (p) { watcher.unobserve(p); }); c.el.replaceWith(built.el); }
+    else {
+      var list = $("list"), after = null, mine = v.order || 0;
+      Object.keys(cards).forEach(function (o) { var ov = (videos[o] || {}).order || 0; if (ov > mine && (!after || ov < after.ord)) after = { ord: ov, el: cards[o].el }; });
+      list.insertBefore(built.el, after ? after.el : null);
+    }
+    cards[id] = { el: built.el, ui: built.ui, key: k, build: bk, round: v.round };
+    if (fid) { var n = $(fid); if (n) { try { n.focus({ preventScroll: true }); if (a0 !== undefined && a0 !== null) n.setSelectionRange(a0, a1); } catch (e) {} } }
+  }
+  function empty() {
+    var list = $("list"), has = list.querySelector(".card");
+    var e = $("empty");
+    if (!has && !e) { var d = el("div", "empty", "Nothing is waiting on you. Tap Edit new video above and it shows up here when its first cut is ready."); d.id = "empty"; list.appendChild(d); }
+    if (has && e) e.remove();
+  }
+  function refresh() {
+    Object.keys(videos).sort(function (a, b) { return (videos[a].order || 0) - (videos[b].order || 0); }).forEach(function (id) { sync(id); });
+    Object.keys(cards).forEach(function (id) { if (!videos[id]) sync(id); });
+    empty();
+    drawOrder();
+  }
+
+  // The order I work in: what I am editing now first, then what waits for me in the order you sent it (a video you pressed Make priority on jumps to the front of that group), then what waits for you.
+  // `priority/<id>` = { at, name } is written by the button and removed by me when I start that video. `queue: {pos, note}` on a video document still moves it inside the "waiting for you" group.
+  function makePriority(id, name, btn) {
+    if (!db) return;
+    btn.disabled = true;
+    var at = new Date().toISOString();
+    anchorOf(btn).then(function (anchor) {
+      return db.doc("priority/" + id).set({ at: at, name: name }).then(function () {
+        priorities[id] = { at: at, name: name }; drawOrder();
+        return alertClaude(anchor, "Couch Cut priority: " + name + " (" + id + "): do this one first.");
+      });
+    }).catch(function () { btn.disabled = false; });
+  }
+  function undoPriority(id, btn) {
+    if (!db) return;
+    btn.disabled = true;
+    db.doc("priority/" + id).delete().then(function () { delete priorities[id]; drawOrder(); }).catch(function () { btn.disabled = false; });
+  }
+  function sentMs(it) { var t = Date.parse(it.sent); return isNaN(t) ? Infinity : t; }
+  var drawOrder = once(function () {
+    var box = $("order"), ol = $("orderlist"); if (!box || !ol) return;
+    var items = [];
+    Object.keys(videos).forEach(function (id) {
+      var v = videos[id], a = answers[id] || {}, ph = phase(id), rank, text;
+      if (ph === "gone") return;
+      if (ph === "building") { rank = 0; text = "I am editing it now."; }
+      else if (ph === "approved") { rank = 1; text = "You approved it. I make the final and upload it to Google Drive when it is its turn."; }
+      else if (ph === "sent") { rank = 1; text = "Waiting for me to start. Your answers are saved."; }
+      else if (ph === "review") { rank = 2; text = "Your turn: watch it, then press Send edits or Looks good."; }
+      else { rank = 2; text = "Your turn: pick a style, then press Looks good, render."; }
+      var q = v.queue || {};
+      items.push({ id: id, rank: rank, pos: q.pos != null ? q.pos : 1000 + ((v.order || 0) % 100000), name: v.name, text: text, note: q.note || "", live: ph === "building",
+                   sent: rank < 2 ? (a.saved || "") : "", prio: rank === 1 && priorities[id] ? priorities[id].at : "" });
+    });
+    Object.keys(requests).forEach(function (k) {
+      var r = requests[k]; if (r.status === "done") return;
+      var snip = r.text ? (r.text.length > 40 ? r.text.slice(0, 40) + "…" : r.text) : "";
+      var started = r.status === "started";
+      items.push({ id: k, rank: started ? 0 : 1, pos: 5000, name: snip ? "New video: “" + snip + "”" : "A new video you asked for", text: started ? "I am finding it, listening to it and cutting it." : "Waiting for me to start.", note: "",
+                   live: started, sent: r.created || "", prio: !started && priorities[k] ? priorities[k].at : "" });
+    });
+    items.sort(function (a, b) {
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      if (a.rank === 1) {
+        if (!!a.prio !== !!b.prio) return a.prio ? -1 : 1;
+        if (a.prio) return Date.parse(b.prio) - Date.parse(a.prio);          // the newest press is the most urgent
+        var sa = sentMs(a), sb = sentMs(b); if (sa !== sb) return sa < sb ? -1 : 1;     // otherwise the order you sent them in
+      }
+      return a.pos - b.pos;
+    });
+    ol.textContent = "";
+    box.hidden = !items.length;
+    var firstWaiting = true, firstPrio = true, lineNo = 1;
+    items.forEach(function (it) {
+      var li = el("li", it.rank < 2 ? "me" : "");
+      var b = el("b", "", ""); if (it.live) b.appendChild(liveDot()); b.appendChild(document.createTextNode(it.name)); li.appendChild(b);
+      var text = it.text;
+      if (it.rank === 1) {
+        if (it.prio) {
+          text = "Priority: " + (!firstPrio ? "I do this one right after the priority above it. " : items[0].rank === 0 ? "I do this one as soon as the one I am drawing now is finished. " : "I do this one next. ") + text;
+          firstPrio = false;
+        }
+        else text = (firstWaiting && !items.some(function (o) { return o.prio; }) ? "Up next. " : "In line, number " + (++lineNo) + ". ") + text;
+        if (firstWaiting && !it.prio) lineNo = 1;
+        firstWaiting = false;
+      }
+      li.appendChild(document.createTextNode(text));
+      if (it.rank < 2 && it.sent && !isNaN(Date.parse(it.sent))) li.appendChild(el("span", "why", "You sent it at " + clock(it.sent) + "."));
+      if (it.note) li.appendChild(el("span", "why", it.note));
+      if (it.rank === 1) {
+        var act = el("div", "prioact");
+        if (it.prio) {
+          act.appendChild(el("span", "pill", "Priority"));
+          var un = el("button", "linkbtn", "Undo"); un.type = "button"; un.addEventListener("click", function () { undoPriority(it.id, un); }); act.appendChild(un);
+        } else {
+          var mp = el("button", "btn small", "Make priority"); mp.type = "button";
+          mp.setAttribute("aria-label", "Make priority: " + it.name);
+          mp.addEventListener("click", function () { makePriority(it.id, it.name, mp); }); act.appendChild(mp);
+        }
+        li.appendChild(act);
+      }
+      ol.appendChild(li);
+    });
+  });
+
+  function listen(name, onData, onFail) {
+    db.collection(name).onSnapshot(function (snap) {
+      var next = {};
+      snap.docs.forEach(function (d) { next[d.id] = d.data(); });
+      onData(next);
+    }, onFail || function () {});
+  }
+  function start() {
+    empty();
+    if (!db) { $("list").insertBefore(el("p", "sub", "Sign in to claude.ai to see and answer your videos."), $("list").firstChild); return; }
+    listen("videos", function (next) { videos = next; if (answersReady) refresh(); });      // cards wait for your saved answers, so a draft is never lost to which list arrives first
+    listen("answers", function (next) { answers = next; answersReady = true; refresh(); }, function () { answersReady = true; refresh(); });
+    listen("requests", function (next) { requests = next; drawRequests(); });
+    listen("refresh", function (next) { refreshes = next; redrawWaiting(); });
+    listen("priority", function (next) { priorities = next; drawOrder(); });
+  }
+
+  drawAssetChips();
+  $("nv-go").addEventListener("click", function () { sendNew(this); });
+  setInterval(tick, 1000);
+  document.addEventListener("visibilitychange", function () { if (document.hidden) flushAll(); else tick(); });
+  window.addEventListener("pagehide", flushAll);
+
+  if (window.claude && window.claude.use) {
+    Promise.all([window.claude.use("db").catch(function () { return null; }), window.claude.use("comments").catch(function () { return null; })])
+      .then(function (r) { db = r[0]; comments = r[1]; start(); });
+  } else { start(); }
+})();
+</script>
