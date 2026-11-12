@@ -1,0 +1,180 @@
+<style>
+.sc{font-family:var(--font-sans);color:var(--text-primary);--wp-ink:var(--text-primary);--wp-muted:var(--text-secondary);--wp-line:var(--border);--wp-bar:var(--bg-secondary,var(--surface-1));--wp-sel:#FFEB99;--wp-sel-ink:#3B1220}
+.sc h2{margin:0 0 4px;font-size:18px;font-weight:500}
+.sc .sub{font-size:13px;color:var(--text-secondary);margin:0 0 12px}
+.sc .row{display:grid;grid-template-columns:22px 28px 48px 1fr auto;gap:8px;align-items:start;padding:10px 0;border-top:0.5px solid var(--border)}
+.sc .row.drop-before{box-shadow:inset 0 2px 0 var(--border-accent)}
+.sc .row.drop-after{box-shadow:inset 0 -2px 0 var(--border-accent)}
+.sc .row.dragging{opacity:0.45}
+.sc .drag{cursor:grab}
+.sc .endzone{font-size:12px;color:var(--text-muted);text-align:center;border:0.5px dashed var(--border);border-radius:var(--radius);padding:6px;margin-top:6px}
+.sc .endzone.drop-after{border-color:var(--border-accent);color:var(--text-primary)}
+.sc .n{font-size:13px;color:var(--text-secondary);padding-top:6px}
+.sc .t{font-size:13px;color:var(--text-muted);font-variant-numeric:tabular-nums;padding-top:6px}
+.sc .x{font-size:15px;line-height:1.5;display:block;padding-top:3px}
+.sc .row.cut .x,.sc .row.cut .wp-line{text-decoration:line-through;color:var(--text-muted)}
+.sc .why{font-size:12px;color:var(--text-secondary);display:block;margin-top:2px}
+.sc button{font-size:13px;padding:4px 10px;min-height:0;height:30px}
+.sc .wp-bar button{height:auto}
+.sc .handle{color:var(--text-muted);font-size:18px;text-align:center;user-select:none;padding-top:4px}
+.sc .note{width:100%;margin-top:6px;font-size:13px}
+.sc textarea.extra{width:100%;min-height:64px;margin-top:6px;font-size:13px;box-sizing:border-box}
+.sc .sheet{background:var(--surface-1);border-radius:var(--radius);padding:12px 14px;margin:14px 0;font-size:15px;line-height:1.7}
+.sc .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}
+.sc .bar input{flex:1;min-width:200px}
+.sc .meta{display:flex;gap:18px;font-size:13px;color:var(--text-secondary);margin:0 0 6px}
+.sc .err{font-size:13px;color:var(--text-danger);margin:8px 0 0}
+.sc [hidden]{display:none}
+__WP_CSS__
+</style>
+<div class="sc">
+<h2 class="sr-only">Check your script: change, reorder by grab and drop, take out single words, style words, and add notes line by line</h2>
+<h2>Check your script</h2>
+<p class="sub">Tap a word to select it, then take just that word out, or show it in another color or font. Tap Cut to take a whole line out (Put back brings it back). Grab a line and drop it where you want it. Write under any line what you want changed.</p>
+<div class="meta"><span id="mode"></span><span id="len"></span></div>
+<div id="pick"></div>
+<div id="did"></div>
+<div id="rows"></div>
+<div class="endzone" id="endzone">Drop a line here to put it last</div>
+<div class="wp-bar" id="wpbar" hidden></div>
+<p class="sub" style="margin:14px 0 4px">As it will read</p>
+<div class="sheet" id="sheet"></div>
+<div class="bar"><input id="fix" type="text" placeholder="Fix a misheard word, like: Glowmarc = Glowmark" aria-label="Fix a misheard word"/></div>
+<textarea class="extra" id="extra" placeholder="Anything else: a hook, on screen text, a sound, the music… Say it in your own words." aria-label="Anything else"></textarea>
+<div class="bar">
+<button id="ok">Looks good, build it ↗</button>
+<button id="send">Send my changes ↗</button>
+<button id="reset">Start over</button>
+</div>
+<p class="err" id="err" hidden></p>
+</div>
+<script>
+__WP_JS__
+(function(){
+var D=__DATA__;
+// Rows may come in the short form (x = the words as a list, i0 = the number of the first word, out = {word: "engine"|"owner"}, sty = {word: style}).
+// It says the same as the long form in about a third of the letters, so the widget reaches the chat sooner.
+D.rows.forEach(function(r){
+ if(!r.x||r.words)return;
+ var o=r.out||{},y=r.sty||{};
+ r.words=r.x.map(function(w,k){var i=r.i0+k;return {i:i,w:w,d:o[i]!==undefined,by:o[i]||'',s:y[i]||null};});
+ r.text=r.x.join(' ');
+});
+function $(id){return document.getElementById(id);}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
+var order0=D.rows.map(function(r){return r.n;}),order=order0.slice();
+var info={},kept={},notes={},node={},rowOf={};
+D.rows.forEach(function(r){info[r.n]=r;kept[r.n]=r.kept;notes[r.n]=r.note||'';(r.words||[]).forEach(function(w){rowOf[w.i]=r.n;});});
+var wp=WP.State(),wordMap=WP.wordsOf(D.rows),dragging=null;
+var rowsEl=$('rows'),endEl=$('endzone'),errEl=$('err');
+function keptChanges(){return order0.filter(function(n){return kept[n]!==info[n].kept;});}
+function orderChanged(){return order.join(',')!==order0.join(',');}
+function noteList(){return order0.filter(function(n){return notes[n]&&notes[n].trim()&&notes[n].trim()!==(info[n].note||'').trim();});}
+function wordParts(){return WP.parts(wp,D.rows);}
+function hasChanges(){return keptChanges().length>0||orderChanged()||noteList().length>0||wordParts().length>0||$('fix').value.trim().length>0||$('extra').value.trim().length>0;}
+function quiet(){errEl.hidden=true;}
+function say(msg){errEl.textContent=msg;errEl.hidden=false;}
+// the parts under the lines: how it will read, the length, the word toolbar
+function summary(){
+ var secs=0;
+ order.forEach(function(n){if(kept[n])secs+=info[n].s+0.25;});
+ $('sheet').innerHTML=WP.readHtml(wp,order.map(function(n){return info[n];}),function(n){return kept[n];});
+ var changed=keptChanges().length>0||orderChanged()||wordParts().length>0;
+ $('len').textContent='Length: '+(changed?'about '+Math.round(secs):Math.round(D.length))+' seconds'+(changed?' (I will re-cut it to be sure)':'');
+ var html=WP.barHtml(wp,wordMap);$('wpbar').innerHTML=html;$('wpbar').hidden=!html;
+}
+// one line: only what can change is repainted (its words, the reason, the button)
+function paint(n){
+ var r=info[n],k=kept[n],p=node[n],moved=k!==r.kept;
+ p.row.className='row'+(k?'':' cut');
+ p.x.innerHTML=WP.lineHtml(wp,r,k);
+ p.why.textContent=!k&&(r.why||moved)?(r.why&&!moved?r.why:'you asked to cut this line'):'';
+ p.why.hidden=!p.why.textContent;
+ p.btn.textContent=k?'Cut':'Put back';
+ p.btn.setAttribute('aria-label',(k?'Cut':'Put back')+' line '+n);
+}
+function paintWords(list){var seen={};list.forEach(function(i){var n=rowOf[i];if(n!==undefined&&!seen[n]){seen[n]=1;paint(n);}});}
+function build(){
+ D.rows.forEach(function(r){
+  var n=r.n,row=document.createElement('div');
+  row.dataset.n=n;
+  row.innerHTML='<span class="handle drag" draggable="true" title="Grab and drop to move this line" aria-label="Grab to move line '+n+'"><i class="ti ti-grip-vertical"></i></span>'
+   +'<span class="n drag" draggable="true">'+n+'</span><span class="t drag" draggable="true">'+esc(r.t)+'</span>'
+   +'<span><span class="x"></span><span class="why"></span>'
+   +'<input class="note" type="text" data-note="'+n+'" value="'+esc(notes[n])+'" placeholder="Change anything here: make it shorter, say it differently, add a pop up…" aria-label="Note for line '+n+'"/></span>'
+   +'<button data-keep="'+n+'"></button>';
+  node[n]={row:row,x:row.querySelector('.x'),why:row.querySelector('.why'),btn:row.querySelector('button'),note:row.querySelector('.note')};
+  paint(n);
+ });
+ $('mode').textContent=D.mode?('Reel type: '+D.mode):'';
+ $('pick').innerHTML=D.pick?('<div class="sheet" style="margin:0 0 12px"><b style="font-weight:500">I watched your video. My pick: '+esc(D.pick.look)+'</b>'+(D.pick.runner?' (close second: '+esc(D.pick.runner)+')':'')+'<br/><span style="font-size:13px;color:var(--text-secondary)">'+D.pick.why.map(esc).join(' ')+'</span></div>'):'';
+ $('did').innerHTML=(D.did||[]).map(function(x){return '<p class="sub" style="margin:0 0 8px">'+esc(x)+'</p>';}).join('');
+ arrange();
+}
+// put the lines in their order by moving them (nothing is built again, so a note you are writing stays as it is)
+function arrange(){order.forEach(function(n){rowsEl.appendChild(node[n].row);});summary();}
+function place(n,target,after){if(n===target)return;order.splice(order.indexOf(n),1);var i=order.indexOf(target);order.splice(after?i+1:i,0,n);arrange();}
+function clearMarks(){Array.prototype.forEach.call(rowsEl.querySelectorAll('.drop-before,.drop-after,.dragging'),function(x){x.classList.remove('drop-before','drop-after');});endEl.classList.remove('drop-after');}
+rowsEl.addEventListener('click',function(e){
+ quiet();
+ var w=e.target.closest('[data-wp-i]');
+ if(w){var i=+w.dataset.wpI;wp.sel[i]=!wp.sel[i];w.classList.toggle('wp-sel',!!wp.sel[i]);var html=WP.barHtml(wp,wordMap);$('wpbar').innerHTML=html;$('wpbar').hidden=!html;return;}
+ var b=e.target.closest('[data-keep]');if(!b)return;
+ var n=+b.dataset.keep,had=WP.selected(wp);
+ kept[n]=!kept[n];wp.sel={};paintWords(had);paint(n);summary();
+});
+$('wpbar').addEventListener('click',function(e){
+ var b=e.target.closest('[data-wp]');if(!b)return;
+ var had=WP.selected(wp);
+ if(WP.apply(wp,b.dataset.wp,wordMap)){paintWords(had);summary();}
+});
+rowsEl.addEventListener('input',function(e){if(e.target.dataset.note){notes[+e.target.dataset.note]=e.target.value;quiet();}});
+rowsEl.addEventListener('dragstart',function(e){
+ var g=e.target.closest('.drag'),r=e.target.closest('.row');if(!g||!r)return;
+ dragging=+r.dataset.n;r.classList.add('dragging');
+ try{e.dataTransfer.setData('text/plain',String(dragging));e.dataTransfer.effectAllowed='move';}catch(x){}
+});
+rowsEl.addEventListener('dragover',function(e){
+ if(dragging===null)return;e.preventDefault();
+ var r=e.target.closest('.row');if(!r)return;
+ var box=r.getBoundingClientRect(),cls=e.clientY<box.top+box.height/2?'drop-before':'drop-after';
+ if(r.classList.contains(cls))return;
+ clearMarks();r.classList.add(cls);
+});
+rowsEl.addEventListener('drop',function(e){
+ if(dragging===null)return;e.preventDefault();
+ var r=e.target.closest('.row');
+ if(r){var box=r.getBoundingClientRect();place(dragging,+r.dataset.n,e.clientY>=box.top+box.height/2);}
+ dragging=null;clearMarks();
+});
+endEl.addEventListener('dragover',function(e){if(dragging===null)return;e.preventDefault();clearMarks();endEl.classList.add('drop-after');});
+endEl.addEventListener('drop',function(e){if(dragging===null)return;e.preventDefault();place(dragging,order[order.length-1],true);dragging=null;clearMarks();});
+document.addEventListener('dragend',function(){dragging=null;clearMarks();Array.prototype.forEach.call(rowsEl.querySelectorAll('.dragging'),function(x){x.classList.remove('dragging');});});
+$('fix').addEventListener('input',quiet);
+$('extra').addEventListener('input',quiet);
+$('ok').onclick=function(){
+ if(hasChanges()){say('You have changes written. Tap Send my changes, or Start over to clear them.');return;}
+ sendPrompt('Looks good. Build it.');
+};
+$('reset').onclick=function(){
+ order=order0.slice();wp=WP.State();
+ D.rows.forEach(function(r){kept[r.n]=r.kept;notes[r.n]=r.note||'';node[r.n].note.value=notes[r.n];paint(r.n);});
+ $('fix').value='';$('extra').value='';quiet();arrange();
+};
+$('send').onclick=function(){
+ if(!hasChanges()){say('Nothing has changed yet. Tap Looks good if you are happy with it.');return;}
+ var parts=[];
+ keptChanges().forEach(function(n){parts.push((kept[n]?'keep':'cut')+' line '+n);});
+ if(orderChanged()){parts.push('new order of the lines: '+order.join(', '));}
+ wordParts().forEach(function(x){parts.push(x);});
+ noteList().forEach(function(n){parts.push('note on line '+n+': "'+notes[n].trim().replace(/"/g,"'")+'"');});
+ var f=$('fix').value.trim();
+ if(f){var m=f.split('=');parts.push(m.length>1?'fix "'+m[0].trim()+'" to "'+m.slice(1).join('=').trim()+'"':'fix: '+f);}
+ var x=$('extra').value.trim();
+ if(x){parts.push('also: "'+x.replace(/"/g,"'")+'"');}
+ var a=WP.args(wp,D.rows);
+ sendPrompt('Script changes: '+parts.join('; ')+'.'+(a?' (for ./reel script: '+a+')':''));
+};
+build();
+})();
+</script>
